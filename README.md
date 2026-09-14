@@ -77,6 +77,14 @@ fastapi-postgres-demo/
 │       ├── companies.html
 │       ├── order_history.html
 │       └── order_complete.html
+├── tests/
+│   └── test_orders_complete.py
+├── .github/
+│   └── workflows/
+│       └── ci.yml          # CI（pre-commit と同じチェックを実行）
+├── .pre-commit-config.yaml # チェック項目の唯一の定義
+├── pyproject.toml          # 依存関係 + ruff / mypy / pytest の設定
+├── uv.lock
 ├── .venv/
 ├── .gitignore
 └── ...
@@ -726,6 +734,72 @@ http://127.0.0.1:8000/docs
 ```
 
 なお、このアプリケーションの主要な画面はHTML/Jinja2による画面であり、Swagger UIはFastAPIが提供するAPIドキュメントです。
+
+## 10.1 テストと静的解析
+
+個別に実行する場合：
+
+```bash
+uv run ruff check .     # lint（select = ALL）
+uv run ruff format .    # フォーマッタ
+uv run mypy             # 型チェック（strict）
+uv run pytest           # テスト
+```
+
+`mypy` に引数は渡しません。対象は `pyproject.toml` の `[tool.mypy] files` で `app` / `tests` と定義済みです。
+
+テストは `db.get_connection` をフェイクの接続へ差し替えたうえで、FastAPIの `TestClient` から各ルートを呼び出します。SQLの結果行がPydanticモデルとテンプレートを通して正しく描画されるか、`parse_quantities` がフォームの値を正しく解釈するかを検証しており、**PostgreSQLが無くても実行できます**。
+
+## 10.2 pre-commit フックとCI
+
+チェック項目は `.pre-commit-config.yaml` に**一箇所だけ**定義し、ローカルのコミット時とCIの両方が同じ定義を実行します。
+
+| | 実行方法 | 対象ファイル |
+| --- | --- | --- |
+| ローカル | `git commit` （フック経由） | ステージされたファイル |
+| CI | `uv run pre-commit run --all-files` | リポジトリ全体 |
+
+CIだけが厳しい／ローカルだけが厳しい、という状態が原理的に起こりません。チェックを追加・変更するときも `.pre-commit-config.yaml` だけを直せば両方に反映されます。
+
+### 初回セットアップ
+
+クローン後に一度だけ実行します。
+
+```bash
+uv sync
+uv run pre-commit install
+```
+
+これで `git commit` のたびに次が走り、1つでも失敗するとコミットは中断されます。
+
+| hook | 内容 |
+| --- | --- |
+| `uv-lock-check` | `pyproject.toml` と `uv.lock` の整合性（`uv lock --check`） |
+| `ruff-check` | lint。自動修正可能なものは修正したうえで失敗させる |
+| `ruff-format` | フォーマット。整形が入った場合は失敗させる |
+| `mypy` | strict モードの型チェック |
+| `pytest` | テスト |
+
+`ruff-check` と `ruff-format` はファイルを書き換えてから失敗します。整形結果を確認して `git add` し直し、もう一度コミットしてください。
+
+全ファイルに対して手動で走らせる場合（CIと同じ実行）：
+
+```bash
+uv run pre-commit run --all-files
+```
+
+緊急時にフックを飛ばす場合は `git commit --no-verify` を使えますが、CIでは同じチェックが走るため結局失敗します。
+
+### CI
+
+`.github/workflows/ci.yml` が `main` への push、全てのプルリクエスト、および手動実行（`workflow_dispatch`）で起動します。
+
+1. `uv sync --locked --all-groups` — `uv.lock` を更新せずに同期する。ロックファイルがずれていればここで失敗する
+2. `uv run pre-commit run --all-files --show-diff-on-failure` — フックと同一のチェックを実行する
+
+`--show-diff-on-failure` を付けているため、フォーマット差分が原因で落ちた場合はCIのログに差分がそのまま出ます。
+
+PostgreSQLはCIで起動しません。テストが `db.get_connection` を差し替えており、DBへ接続しないためです。
 
 ---
 

@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# 同じブランチへ続けて push したときは古い実行を打ち切る。
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: lint / type check / test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.10.5"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Set up Python
+        run: uv python install
+
+      - name: Install dependencies
+        # --locked: uv.lock を更新せず、ずれていたら失敗させる。
+        run: uv sync --locked --all-groups
+
+      # ローカルの pre-commit フックと同じ定義をそのまま実行する。
+      # チェック内容の変更は .pre-commit-config.yaml だけで完結する。
+      - name: Run checks (same hooks as pre-commit)
+        run: uv run pre-commit run --all-files --show-diff-on-failure --color always

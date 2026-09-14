@@ -1,4 +1,7 @@
+from __future__ import annotations
+
 from datetime import date
+from typing import TYPE_CHECKING, Any, Self, override
 
 import pytest
 from fastapi import HTTPException
@@ -9,67 +12,80 @@ from app import db
 from app.main import app, format_yen, parse_quantities
 from app.schemas import Company, CompanyContact, OrderSummary
 
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+    from types import TracebackType
 
-class FakeCursor:
-    def __init__(self, *, fetchone_result=None, fetchall_results=()):
+Row = tuple[Any, ...]
+
+
+class FakeContext:
+    """Context manager base shared by the psycopg fakes."""
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        """Never suppress exceptions raised inside the block."""
+
+
+class FakeCursor(FakeContext):
+    def __init__(
+        self,
+        *,
+        fetchone_result: Row | None = None,
+        fetchall_results: Sequence[Sequence[Row]] = (),
+    ) -> None:
         self.fetchone_result = fetchone_result
         self.fetchall_results = iter(fetchall_results)
         self.sql = ""
-        self.params = None
+        self.params: object = None
 
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        return False
-
-    def execute(self, sql, params=None):
+    def execute(self, sql: str, params: tuple[Any, ...] | None = None) -> None:
         self.sql = sql
         self.params = params
 
-    def executemany(self, sql, params_seq):
+    def executemany(self, sql: str, params_seq: list[Row]) -> None:
         self.sql = sql
         self.params = list(params_seq)
 
-    def fetchone(self):
+    def fetchone(self) -> Row | None:
         return self.fetchone_result
 
-    def fetchall(self):
-        return next(self.fetchall_results, [])
+    def fetchall(self) -> list[Row]:
+        return list(next(self.fetchall_results, []))
 
 
-class FakeTransaction:
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        return False
+class FakeTransaction(FakeContext):
+    """Stand-in for psycopg's transaction context manager."""
 
 
-class FakeConnection:
-    def __init__(self, cursor):
+class FakeConnection(FakeContext):
+    def __init__(self, cursor: FakeCursor) -> None:
         self._cursor = cursor
 
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        return False
-
-    def cursor(self):
+    def cursor(self) -> FakeCursor:
         return self._cursor
 
-    def transaction(self):
+    def transaction(self) -> FakeTransaction:
         return FakeTransaction()
 
 
-def test_format_yen():
+def test_format_yen() -> None:
     assert format_yen(12000) == "12,000円"
 
 
-def test_homepage_renders_company_and_bento_lists(monkeypatch):
+def test_homepage_renders_company_and_bento_lists(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     class HomeCursor(FakeCursor):
-        def fetchall(self):
+        @override
+        def fetchall(self) -> list[Row]:
             if "FROM companies" in self.sql:
                 return [(1, "株式会社ABC"), (2, "株式会社XYZ")]
             if "FROM bento b" in self.sql:
@@ -98,21 +114,25 @@ def test_homepage_renders_company_and_bento_lists(monkeypatch):
     assert "小麦, 卵" in response.text
 
 
-def test_company_directory_page_renders_contact_details(monkeypatch):
+def test_company_directory_page_renders_contact_details(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     cursor = FakeCursor(
-        fetchall_results=[[
-            (
-                1,
-                "株式会社ABC",
-                "山田 太郎",
-                "yamada@abc.example.jp",
-                "03-1234-5678",
-                2,
-                date(2026, 8, 29),
-                12000,
-            ),
-            (2, "株式会社XYZ", None, None, None, 0, None, 0),
-        ]],
+        fetchall_results=[
+            [
+                (
+                    1,
+                    "株式会社ABC",
+                    "山田 太郎",
+                    "yamada@abc.example.jp",
+                    "03-1234-5678",
+                    2,
+                    date(2026, 8, 29),
+                    12000,
+                ),
+                (2, "株式会社XYZ", None, None, None, 0, None, 0),
+            ]
+        ],
     )
     monkeypatch.setattr(
         db,
@@ -132,13 +152,15 @@ def test_company_directory_page_renders_contact_details(monkeypatch):
     assert "未登録" in response.text
 
 
-def test_order_complete_page_renders(monkeypatch):
+def test_order_complete_page_renders(monkeypatch: pytest.MonkeyPatch) -> None:
     cursor = FakeCursor(
         fetchone_result=(1, "2026-08-29", "株式会社ABC", 12000),
-        fetchall_results=[[
-            ("唐揚げ弁当", 2, 800, 1600),
-            ("鮭弁当", 1, 850, 850),
-        ]],
+        fetchall_results=[
+            [
+                ("唐揚げ弁当", 2, 800, 1600),
+                ("鮭弁当", 1, 850, 850),
+            ]
+        ],
     )
     monkeypatch.setattr(
         db,
@@ -154,12 +176,14 @@ def test_order_complete_page_renders(monkeypatch):
     assert "12,000円" in response.text
 
 
-def test_order_history_page_renders(monkeypatch):
+def test_order_history_page_renders(monkeypatch: pytest.MonkeyPatch) -> None:
     cursor = FakeCursor(
-        fetchall_results=[[
-            (1, "2026-08-29", "株式会社ABC", 12000),
-            (2, "2026-08-30", "株式会社XYZ", 4500),
-        ]],
+        fetchall_results=[
+            [
+                (1, "2026-08-29", "株式会社ABC", 12000),
+                (2, "2026-08-30", "株式会社XYZ", 4500),
+            ]
+        ],
     )
     monkeypatch.setattr(
         db,
@@ -175,12 +199,16 @@ def test_order_history_page_renders(monkeypatch):
     assert "12,000円" in response.text
 
 
-def test_order_history_page_handles_date_objects_from_db(monkeypatch):
+def test_order_history_page_handles_date_objects_from_db(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     cursor = FakeCursor(
-        fetchall_results=[[
-            (1, date(2026, 8, 29), "株式会社ABC", 12000),
-            (2, date(2026, 8, 30), "株式会社XYZ", 4500),
-        ]],
+        fetchall_results=[
+            [
+                (1, date(2026, 8, 29), "株式会社ABC", 12000),
+                (2, date(2026, 8, 30), "株式会社XYZ", 4500),
+            ]
+        ],
     )
     monkeypatch.setattr(
         db,
@@ -195,7 +223,9 @@ def test_order_history_page_handles_date_objects_from_db(monkeypatch):
     assert "株式会社ABC" in response.text
 
 
-def test_order_complete_returns_404_for_unknown_order(monkeypatch):
+def test_order_complete_returns_404_for_unknown_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     cursor = FakeCursor(fetchone_result=None)
     monkeypatch.setattr(
         db,
@@ -208,7 +238,7 @@ def test_order_complete_returns_404_for_unknown_order(monkeypatch):
     assert response.status_code == 404
 
 
-def test_parse_quantities_ignores_invalid_and_zero_values():
+def test_parse_quantities_ignores_invalid_and_zero_values() -> None:
     form = {
         "quantity_1": "2",
         "quantity_2": "0",
@@ -223,12 +253,12 @@ def test_parse_quantities_ignores_invalid_and_zero_values():
     assert quantities[0].quantity == 2
 
 
-def test_parse_quantities_requires_positive_quantity():
+def test_parse_quantities_requires_positive_quantity() -> None:
     with pytest.raises(HTTPException, match="At least one bento quantity"):
         parse_quantities({"quantity_1": "0"})
 
 
-def test_immutable_models_are_frozen():
+def test_immutable_models_are_frozen() -> None:
     company = Company(id=1, name="株式会社ABC")
     order = OrderSummary(
         id=1,
@@ -244,7 +274,7 @@ def test_immutable_models_are_frozen():
         order.total_price = 9999
 
 
-def test_company_contact_allows_missing_contact_columns():
+def test_company_contact_allows_missing_contact_columns() -> None:
     contact = CompanyContact(
         id=1,
         name="株式会社ABC",

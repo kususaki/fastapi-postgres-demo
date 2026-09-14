@@ -6,6 +6,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class Company(BaseModel):
+    """A company that places bento orders."""
+
     model_config = ConfigDict(frozen=True)
 
     id: int
@@ -13,6 +15,8 @@ class Company(BaseModel):
 
 
 class CompanyContact(BaseModel):
+    """A company with its contact details and order statistics."""
+
     model_config = ConfigDict(frozen=True)
 
     id: int
@@ -26,6 +30,8 @@ class CompanyContact(BaseModel):
 
 
 class Bento(BaseModel):
+    """A bento available on the menu."""
+
     model_config = ConfigDict(frozen=True)
 
     id: int
@@ -34,6 +40,8 @@ class Bento(BaseModel):
 
 
 class BentoAllergenInfo(BaseModel):
+    """The allergens associated with a single bento."""
+
     model_config = ConfigDict(frozen=True)
 
     bento_name: str
@@ -41,6 +49,8 @@ class BentoAllergenInfo(BaseModel):
 
 
 class OrderSummary(BaseModel):
+    """Header information and total price of a single order."""
+
     model_config = ConfigDict(frozen=True)
 
     id: int
@@ -50,6 +60,8 @@ class OrderSummary(BaseModel):
 
 
 class OrderItem(BaseModel):
+    """One line item of an order."""
+
     model_config = ConfigDict(frozen=True)
 
     name: str
@@ -59,6 +71,8 @@ class OrderItem(BaseModel):
 
 
 class QuantitySelection(BaseModel):
+    """A bento and quantity picked on the order screen."""
+
     model_config = ConfigDict(frozen=True)
 
     bento_id: int = Field(gt=0)
@@ -66,10 +80,13 @@ class QuantitySelection(BaseModel):
 
     @property
     def as_db_tuple(self) -> tuple[int, int]:
+        """Return the tuple layout used by the order_items INSERT."""
         return self.bento_id, self.quantity
 
 
 class OrderDraft(BaseModel):
+    """An order that has not been persisted yet."""
+
     model_config = ConfigDict(frozen=True)
 
     company_id: int = Field(gt=0)

@@ -20,15 +20,17 @@ from app.schemas import (
 
 DATABASE_URL = os.getenv("DATABASE_URL", "dbname=demo_db")
 
+_NO_RETURNING_ROW = "INSERT ... RETURNING id returned no row"
+
 
 def get_connection() -> psycopg.Connection:
     """Create a new database connection."""
     return psycopg.connect(DATABASE_URL)
 
 
-def _normalize_date(value: Any) -> str:
+def _normalize_date(value: object) -> str:
     """Convert a PostgreSQL date/datetime value to the string used by the UI."""
-    if isinstance(value, (date, datetime)):
+    if isinstance(value, date | datetime):
         return value.isoformat()
     return str(value)
 
@@ -247,7 +249,7 @@ def insert_order(draft: OrderDraft) -> int:
         )
         order_row = cur.fetchone()
         if order_row is None:
-            raise RuntimeError("INSERT ... RETURNING id returned no row")
+            raise RuntimeError(_NO_RETURNING_ROW)
         order_id = order_row[0]
 
         cur.executemany(
@@ -259,10 +261,7 @@ def insert_order(draft: OrderDraft) -> int:
             )
             VALUES (%s, %s, %s)
             """,
-            [
-                (order_id, *item.as_db_tuple)
-                for item in draft.quantities
-            ],
+            [(order_id, *item.as_db_tuple) for item in draft.quantities],
         )
 
     return int(order_id)

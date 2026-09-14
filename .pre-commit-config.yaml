@@ -1,0 +1,49 @@
+# CI (.github/workflows/ci.yml) はこのファイルの内容をそのまま
+# `uv run pre-commit run --all-files` で実行する。
+# チェック内容を増減するときはここだけを直せば、ローカルと CI の両方に反映される。
+#
+# 社内プロキシ環境でも動くよう、外部リポジトリの hook は使わず
+# すべて repo: local + uv run で完結させている。
+minimum_pre_commit_version: "4.0.0"
+default_install_hook_types: [pre-commit]
+default_stages: [pre-commit]
+
+repos:
+  - repo: local
+    hooks:
+      - id: uv-lock-check
+        name: uv lock (pyproject.toml と uv.lock の整合性)
+        entry: uv lock --check
+        language: system
+        files: ^(pyproject\.toml|uv\.lock)$
+        pass_filenames: false
+
+      - id: ruff-check
+        name: ruff check (lint / select = ALL)
+        entry: uv run ruff check --force-exclude --fix --exit-non-zero-on-fix
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
+
+      - id: ruff-format
+        name: ruff format (formatter)
+        entry: uv run ruff format --force-exclude
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
+
+      - id: mypy
+        name: mypy (strict)
+        entry: uv run mypy
+        language: system
+        types_or: [python, pyi]
+        pass_filenames: false
+        require_serial: true
+
+      - id: pytest
+        name: pytest
+        entry: uv run pytest
+        language: system
+        types_or: [python, pyi]
+        pass_filenames: false
+        require_serial: true

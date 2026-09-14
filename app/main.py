@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from typing import Any
+from typing import TYPE_CHECKING
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from app import db
 from app.schemas import OrderDraft, QuantitySelection
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 app = FastAPI()
 
@@ -25,7 +27,7 @@ def format_yen(value: int) -> str:
 templates.env.filters["yen"] = format_yen
 
 
-def _required_int(value: Any, *, field_name: str) -> int:
+def _required_int(value: object, *, field_name: str) -> int:
     if value is None:
         raise HTTPException(
             status_code=400,
@@ -33,15 +35,15 @@ def _required_int(value: Any, *, field_name: str) -> int:
         )
 
     try:
-        return int(value)
-    except (TypeError, ValueError) as exc:
+        return int(str(value))
+    except ValueError as exc:
         raise HTTPException(
             status_code=400,
             detail=f"{field_name} must be an integer",
         ) from exc
 
 
-def _required_str(value: Any, *, field_name: str) -> str:
+def _required_str(value: object, *, field_name: str) -> str:
     if value is None:
         raise HTTPException(
             status_code=400,
@@ -50,7 +52,7 @@ def _required_str(value: Any, *, field_name: str) -> str:
     return str(value)
 
 
-def parse_quantities(form: Mapping[str, Any]) -> tuple[QuantitySelection, ...]:
+def parse_quantities(form: Mapping[str, object]) -> tuple[QuantitySelection, ...]:
     """Extract positive quantity_* fields from a submitted form."""
     quantities = tuple(
         selection
@@ -71,12 +73,12 @@ def parse_quantities(form: Mapping[str, Any]) -> tuple[QuantitySelection, ...]:
 
 def _try_parse_quantity(
     key: str,
-    value: Any,
+    value: object,
 ) -> QuantitySelection | None:
     try:
         bento_id = int(key.removeprefix("quantity_"))
-        quantity = int(value)
-    except (TypeError, ValueError):
+        quantity = int(str(value))
+    except ValueError:
         return None
 
     return (
@@ -86,18 +88,17 @@ def _try_parse_quantity(
     )
 
 
-def _parse_order_draft(form: Mapping[str, Any]) -> OrderDraft:
+def _parse_order_draft(form: Mapping[str, object]) -> OrderDraft:
     return OrderDraft(
-        company_id=_required_int(
-            form.get("company_id"), field_name="company_id"),
-        order_date=_required_str(
-            form.get("order_date"), field_name="order_date"),
+        company_id=_required_int(form.get("company_id"), field_name="company_id"),
+        order_date=_required_str(form.get("order_date"), field_name="order_date"),
         quantities=parse_quantities(form),
     )
 
 
 @app.get("/")
-def index(request: Request):
+def index(request: Request) -> HTMLResponse:
+    """Render the order form with the company list and today's menu."""
     context = {
         "companies": db.fetch_companies(),
         "bentos": db.fetch_bentos(),
@@ -107,7 +108,8 @@ def index(request: Request):
 
 
 @app.get("/companies")
-def company_directory(request: Request):
+def company_directory(request: Request) -> HTMLResponse:
+    """Render the company directory with contact details and order stats."""
     return templates.TemplateResponse(
         request,
         "companies.html",
@@ -116,7 +118,8 @@ def company_directory(request: Request):
 
 
 @app.post("/orders")
-async def create_order(request: Request):
+async def create_order(request: Request) -> RedirectResponse:
+    """Store the submitted order and redirect to its completion page."""
     form = await request.form()
     draft = _parse_order_draft(form)
     order_id = db.insert_order(draft)
@@ -128,7 +131,8 @@ async def create_order(request: Request):
 
 
 @app.get("/orders")
-def order_history(request: Request):
+def order_history(request: Request) -> HTMLResponse:
+    """Render every past order, newest first."""
     return templates.TemplateResponse(
         request,
         "order_history.html",
@@ -137,7 +141,8 @@ def order_history(request: Request):
 
 
 @app.get("/orders/complete")
-def order_complete(request: Request, order_id: int):
+def order_complete(request: Request, order_id: int) -> HTMLResponse:
+    """Render the receipt of a single order."""
     order, items = db.fetch_order(order_id)
 
     if order is None:

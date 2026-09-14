@@ -1,24 +1,113 @@
 [project]
 name = "fastapi-postgres-demo"
 version = "0.1.0"
-description = "Add your description here"
+description = "FastAPI + PostgreSQL の弁当注文管理デモ"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "fastapi>=0.141.1",
-    "httpx>=0.28.1",
     "jinja2>=3.1.6",
     "psycopg[binary]>=3.3.4",
     "pydantic>=2.10.6",
     "python-multipart>=0.0.32",
-    "pytest>=8.3.5",
     "uvicorn>=0.52.4",
-    "ruff>=0.16.5",
-    "mypy>=2.3.1",
 ]
 
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "mypy>=2.3.1",
+    "pre-commit>=4.0",
+    "pytest>=8.3.5",
+    "ruff>=0.16.5",
+]
+
+# ---------------------------------------------------------------------------
+# pytest
+# ---------------------------------------------------------------------------
 [tool.pytest.ini_options]
 pythonpath = ["."]
+testpaths = ["tests"]
+addopts = ["--strict-markers", "--strict-config", "-ra"]
+xfail_strict = true
 filterwarnings = [
-    'ignore:.*Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead\..*:starlette.exceptions.StarletteDeprecationWarning',
+    # starlette.testclient が httpx を使うことへの警告。TestClient の仕様なので黙らせる。
+    'ignore:.*Using `httpx` with `starlette.testclient` is deprecated.*:starlette.exceptions.StarletteDeprecationWarning',
+]
+
+# ---------------------------------------------------------------------------
+# ruff
+# ---------------------------------------------------------------------------
+[tool.ruff]
+target-version = "py313"
+line-length = 88
+# Markdown 内のコードブロックまで整形されると README の説明が壊れるため除外する。
+extend-exclude = ["*.md"]
+
+[tool.ruff.lint]
+# 静的解析はフル活用する方針。全ルールを有効にしたうえで、
+# フォーマッタと衝突するものとこのプロジェクトに合わないものだけを落とす。
+select = ["ALL"]
+ignore = [
+    # フォーマッタ (ruff format) と競合するルール。
+    "COM812",  # missing-trailing-comma
+    "ISC001",  # single-line-implicit-string-concatenation
+    # docstring スタイルの相互排他ペア。pydocstyle の推奨どおり片方を無効化する。
+    "D203",    # one-blank-line-before-class  (D211 を採用)
+    "D213",    # multi-line-summary-second-line  (D212 を採用)
+    # 社内デモアプリのため未記述の docstring は許容する。
+    "D100",    # undocumented-public-module
+    "D104",    # undocumented-public-package
+    "D106",    # undocumented-public-nested-class
+    # Pydantic モデルの Field(...) は関数呼び出しだが既定値として正しい使い方。
+    "B008",    # function-call-in-default-argument
+    # 社内デモアプリなので著作権ヘッダは付けない。
+    "CPY001",  # missing-copyright-notice
+]
+
+# 日本語 UI で意図的に使う全角記号を「紛らわしい文字」として扱わない。
+allowed-confusables = ["／", "　", "：", "－"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = [
+    "INP001",  # pytest の rootdir 配下なので __init__.py は不要
+    "S101",    # assert の使用はテストでは必須
+    "D",       # テストは docstring 必須にしない
+    "PLR2004", # 期待値のマジックナンバーはテストでは読みやすさ優先
+    "ANN401",  # フェイク実装の引数は Any を許容
+]
+
+[tool.ruff.lint.flake8-annotations]
+mypy-init-return = true
+
+[tool.ruff.lint.pydocstyle]
+convention = "pep257"
+
+[tool.ruff.lint.pylint]
+max-args = 6
+
+[tool.ruff.format]
+docstring-code-format = true
+
+# ---------------------------------------------------------------------------
+# mypy
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.13"
+files = ["app", "tests"]
+strict = true
+# strict に含まれない追加の厳格化。
+warn_unreachable = true
+extra_checks = true
+disallow_any_generics = true
+no_implicit_reexport = true
+enable_error_code = [
+    "ignore-without-code",
+    "redundant-expr",
+    "redundant-self",
+    "possibly-undefined",
+    "truthy-bool",
+    "truthy-iterable",
+    "unused-awaitable",
+    "explicit-override",
 ]
