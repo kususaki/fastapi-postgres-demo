@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{% block title %}{% endblock %} | 弁当注文管理</title>
+    <!-- クラスレス CSS: セマンティックな HTML を書くだけで整うため自前の CSS を持たない -->
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/@picocss/pico@2.1.1/css/pico.min.css"
+    />
+    <!-- HTMX: 属性だけで部分更新する。手書き JavaScript は書かない -->
+    <script src="https://cdn.jsdelivr.net/npm/htmx.org@2.0.10/dist/htmx.min.js"></script>
+    <style>
+      /* 唯一の自前 CSS: Pico の既定フォントスタックが日本語を含まないため */
+      :root {
+        --pico-font-family: "Hiragino Sans", "Yu Gothic", sans-serif;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="container">
+      <nav>
+        <ul>
+          <li><strong>弁当注文管理</strong></li>
+        </ul>
+        <ul>
+          <li><a href="/">注文登録</a></li>
+          <li><a href="/orders">注文履歴</a></li>
+          <li><a href="/companies">取引先一覧</a></li>
+        </ul>
+      </nav>
+      {% block content %}{% endblock %}
+    </main>
+  </body>
+</html>

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from fastapi import FastAPI, HTTPException, Request
@@ -9,10 +10,12 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from app import db
-from app.schemas import OrderDraft, QuantitySelection
+from app.schemas import OrderDraft, OrderItem, QuantitySelection
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
+
+    from app.schemas import Bento, Company
 
 app = FastAPI()
 
@@ -52,15 +55,24 @@ def _required_str(value: object, *, field_name: str) -> str:
     return str(value)
 
 
-def parse_quantities(form: Mapping[str, object]) -> tuple[QuantitySelection, ...]:
-    """Extract positive quantity_* fields from a submitted form."""
-    quantities = tuple(
+def iter_quantities(form: Mapping[str, object]) -> tuple[QuantitySelection, ...]:
+    """Extract positive quantity_* fields, allowing an empty selection.
+
+    The order summary panel starts from an empty form, so it needs the
+    parsing without the "at least one bento" rule that parse_quantities adds.
+    """
+    return tuple(
         selection
         for key, value in form.items()
         if key.startswith("quantity_")
         for selection in (_try_parse_quantity(key, value),)
         if selection is not None
     )
+
+
+def parse_quantities(form: Mapping[str, object]) -> tuple[QuantitySelection, ...]:
+    """Extract positive quantity_* fields from a submitted form."""
+    quantities = iter_quantities(form)
 
     if not quantities:
         raise HTTPException(
@@ -88,6 +100,50 @@ def _try_parse_quantity(
     )
 
 
+def _optional_str(value: object) -> str | None:
+    text = str(value).strip() if value is not None else ""
+    return text or None
+
+
+def _today() -> str:
+    """Return today's date in the server timezone, as the date input wants it."""
+    return datetime.now(tz=UTC).astimezone().date().isoformat()
+
+
+def _summary_context(
+    form: Mapping[str, object],
+    companies: list[Company],
+    bentos: list[Bento],
+) -> dict[str, object]:
+    """Build the context of the order summary panel from raw form values.
+
+    The line items reuse OrderItem, the same model the completion screen
+    renders, so the yen amounts are computed in one place only.
+    """
+    by_id = {bento.id: bento for bento in bentos}
+    items = [
+        OrderItem(
+            name=bento.name,
+            quantity=selection.quantity,
+            price=bento.price,
+            subtotal=bento.price * selection.quantity,
+        )
+        for selection in iter_quantities(form)
+        if (bento := by_id.get(selection.bento_id)) is not None
+    ]
+    company_id = _optional_str(form.get("company_id"))
+
+    return {
+        "company_name": next(
+            (company.name for company in companies if str(company.id) == company_id),
+            None,
+        ),
+        "order_date": _optional_str(form.get("order_date")),
+        "items": items,
+        "total_price": sum(item.subtotal for item in items),
+    }
+
+
 def _parse_order_draft(form: Mapping[str, object]) -> OrderDraft:
     return OrderDraft(
         company_id=_required_int(form.get("company_id"), field_name="company_id"),
@@ -99,12 +155,34 @@ def _parse_order_draft(form: Mapping[str, object]) -> OrderDraft:
 @app.get("/")
 def index(request: Request) -> HTMLResponse:
     """Render the order form with the company list and today's menu."""
-    context = {
-        "companies": db.fetch_companies(),
-        "bentos": db.fetch_bentos(),
+    companies = db.fetch_companies()
+    bentos = db.fetch_bentos()
+    context: dict[str, object] = {
+        "companies": companies,
+        "bentos": bentos,
         "bento_allergens": db.fetch_bento_allergens(),
+        "today": _today(),
+        # 初期表示の注文概要。htmx が差し替える前の状態を同じ部分テンプレートで描く。
+        **_summary_context({}, companies, bentos),
     }
     return templates.TemplateResponse(request, "index.html", context)
+
+
+@app.post("/orders/summary")
+async def order_summary(request: Request) -> HTMLResponse:
+    """Render the order summary panel for the values currently in the form.
+
+    htmx posts the whole order form here on every input, so an empty
+    selection must render normally instead of raising the 400 that
+    POST /orders returns.
+    """
+    form = await request.form()
+
+    return templates.TemplateResponse(
+        request,
+        "_summary.html",
+        _summary_context(form, db.fetch_companies(), db.fetch_bentos()),
+    )
 
 
 @app.get("/companies")
@@ -114,6 +192,16 @@ def company_directory(request: Request) -> HTMLResponse:
         request,
         "companies.html",
         {"companies": db.fetch_company_contacts()},
+    )
+
+
+@app.get("/companies/rows")
+def company_rows(request: Request, q: str = "") -> HTMLResponse:
+    """Render just the company cards matching the keyword, for htmx to swap in."""
+    return templates.TemplateResponse(
+        request,
+        "_company_rows.html",
+        {"companies": db.fetch_company_contacts(keyword=q)},
     )
 
 

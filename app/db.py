@@ -105,8 +105,13 @@ def fetch_companies() -> list[Company]:
     return [_company_from_row(row) for row in rows]
 
 
-def fetch_company_contacts() -> list[CompanyContact]:
-    """Return companies with their contact details and order statistics."""
+def fetch_company_contacts(keyword: str = "") -> list[CompanyContact]:
+    """Return companies with their contact details and order statistics.
+
+    ``keyword`` narrows the result with a case-insensitive partial match over
+    the company name and every contact column. CONCAT_WS skips NULL columns,
+    so a company without a contact name is still searchable by its own name.
+    """
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute(
             """
@@ -126,9 +131,13 @@ def fetch_company_contacts() -> list[CompanyContact]:
                 ON oi.order_id = o.id
             LEFT JOIN bento b
                 ON b.id = oi.bento_id
+            WHERE %(keyword)s = ''
+                OR CONCAT_WS(' ', c.name, c.contact_name, c.email, c.phone)
+                    ILIKE %(pattern)s
             GROUP BY c.id, c.name, c.contact_name, c.email, c.phone
             ORDER BY c.name
-            """
+            """,
+            {"keyword": keyword, "pattern": f"%{keyword}%"},
         )
         rows = cur.fetchall()
 

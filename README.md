@@ -6,7 +6,7 @@
 
 このアプリは、弁当の仕出し注文を題材にした業務用デモアプリです。
 
-**FastAPI + PostgreSQL + HTML/Jinja2** というシンプルな構成で、RDBにおける1対多・多対多の関係と、Webアプリケーションからのデータ登録・取得を確認することを目的とします。
+**FastAPI + PostgreSQL + HTML/Jinja2** というシンプルな構成で、画面はクラスレスCSSの Pico.css と HTMX で組み立てており、RDBにおける1対多・多対多の関係と、Webアプリケーションからのデータ登録・取得を確認することを目的とします。
 
 現在の実装では、**会社を選択して弁当を数量指定し、注文を登録する**ところまでを一連の画面として実装しています。また、登録した注文の履歴と、個別の注文完了画面、注文元会社の連絡先を確認する取引先一覧画面も提供しています。
 
@@ -35,10 +35,27 @@ flowchart LR
 - PostgreSQL
 - Pydantic
 - Jinja2
+- Pico.css（クラスレスCSSフレームワーク / CDN）
+- HTMX（CDN）
 
 フロントエンドは**HTML/Jinja2を中心としたシンプルな構成**です。
 
 ReactやVueなどのフロントエンドフレームワークは使用していません。
+
+Pico.css と HTMX はどちらも CDN から `<link>` / `<script>` 1行で読み込むだけで、
+npm もビルドツールも不要です。
+
+- **Pico.css** は、`<article>` `<nav>` `<table>` `<form>` `<details>` といった
+  セマンティックなHTMLを書くだけで見栄えが整う「クラスレス」CSSです。
+  以前はテンプレート4ファイルに**944行のCSS**が直接書かれており、
+  このリポジトリの本題であるSQL・Pydantic・Jinja2の対応関係を埋もれさせていました。
+  現在テンプレートに残っている自前のCSSは、日本語フォントを指定する
+  `--pico-font-family` の**1行だけ**です。
+- **HTMX** は、`hx-get` / `hx-post` といったHTML属性だけで
+  「サーバーが返したHTMLの一部を差し替える」ことを行うライブラリです。
+  仮想DOMもコンポーネントモデルも持ち込みません。
+  これにより**手書きのJavaScriptは0行**になり、
+  金額計算はPython側（`OrderItem` と `format_yen`）に一本化されました。
 
 ---
 
@@ -73,10 +90,13 @@ fastapi-postgres-demo/
 │   ├── db.py
 │   ├── schemas.py
 │   └── templates/
+│       ├── base.html            # 全ページ共通のレイアウト（継承元）
 │       ├── index.html
 │       ├── companies.html
 │       ├── order_history.html
-│       └── order_complete.html
+│       ├── order_complete.html
+│       ├── _summary.html        # 注文概要パネル（部分テンプレート）
+│       └── _company_rows.html   # 取引先カード（部分テンプレート）
 ├── tests/
 │   └── test_orders_complete.py
 ├── .github/
@@ -91,6 +111,15 @@ fastapi-postgres-demo/
 ```
 
 `main.py` では `app/templates` をJinja2のテンプレートディレクトリとして使用しています。
+
+各画面のテンプレートは `{% extends "base.html" %}` で共通レイアウトを継承します。
+`<head>`・CDNの読み込み・ナビゲーションは `base.html` だけが持ちます。
+
+先頭が `_` のファイルは**部分テンプレート**です。
+完全なHTML文書ではなく画面の一部だけを出力し、
+通常のページ（`{% include %}`）とHTMXが呼ぶRoute（`_summary.html` は
+`POST /orders/summary`、`_company_rows.html` は `GET /companies/rows`）の
+両方から同じものを使い回します。
 
 ---
 
@@ -181,9 +210,21 @@ LEFT JOIN order_items oi
     ON oi.order_id = o.id
 LEFT JOIN bento b
     ON b.id = oi.bento_id
+WHERE %(keyword)s = ''
+    OR CONCAT_WS(' ', c.name, c.contact_name, c.email, c.phone)
+        ILIKE %(pattern)s
 GROUP BY c.id, c.name, c.contact_name, c.email, c.phone
 ORDER BY c.name;
 ```
+
+`WHERE` 句は取引先一覧のキーワード絞り込みに対応します。
+キーワードが空文字なら `%(keyword)s = ''` が真になり、全件を返します。
+
+- `ILIKE` はPostgreSQLの大文字小文字を区別しない部分一致です。
+- `CONCAT_WS` はNULLの列を読み飛ばすため、`contact_name` などが未登録の会社も
+  会社名で検索できます。
+- キーワードは `%(keyword)s` / `%(pattern)s` という**名前付きプレースホルダ**で
+  psycopgに渡します。SQL文字列に値を埋め込まないため、SQLインジェクションを防げます。
 
 `contact_name`、`email`、`phone` はNULLを許容するため、Python側では `str | None` として扱い、未登録の場合は画面に「未登録」と表示します。
 
@@ -413,6 +454,10 @@ quantities: tuple[QuantitySelection, ...]
 | POST | `/orders` | 注文登録 |
 | GET | `/orders` | 注文履歴 |
 | GET | `/orders/complete` | 注文完了・注文詳細 |
+| POST | `/orders/summary` | 注文概要パネル（HTMX用の部分HTML） |
+| GET | `/companies/rows` | 取引先カード（HTMX用の部分HTML） |
+
+下2つはHTMXが呼ぶRouteで、完全なHTML文書ではなく画面の一部だけを返します。
 
 ---
 
@@ -429,11 +474,21 @@ FastAPIからテンプレートへ以下のデータを渡します。
 ```text
 companies
 bentos
+bento_allergens
+today
+company_name / order_date / items / total_price
 ```
 
 `companies` は会社選択欄、`bentos` は弁当と価格・数量入力欄の生成に利用します。
+`bento_allergens` は `<details>` で開く食品アレルギー表に使います。
 
-画面右上の「取引先一覧」から `GET /companies` へ遷移できます。
+`today` は注文日欄の初期値です。以前はブラウザのJavaScriptで埋めていましたが、
+サーバー側で `value="{{ today }}"` として渡すようになりました。
+
+最後の4つは注文概要パネルの初期状態で、`_summary.html` がそのまま受け取ります。
+つまり最初の描画と、あとからHTMXが差し替える内容は**まったく同じテンプレート**です。
+
+ナビゲーションから `GET /companies` や `GET /orders` へ遷移できます。
 
 ---
 
@@ -461,7 +516,9 @@ GET /companies
 
 メールアドレスは `mailto:`、電話番号は `tel:` リンクとして表示し、未登録の項目は「未登録」と表示します。
 
-会社名・担当者・連絡先による絞り込みは、ブラウザ側のJavaScriptで行います。
+会社名・担当者・連絡先による絞り込みは、**サーバー側のSQL**で行います。
+検索欄に入力するとHTMXが `GET /companies/rows` を呼び、返ってきた部分HTMLで
+一覧を差し替えます（§6.8）。
 
 ---
 
@@ -615,6 +672,74 @@ GET /orders/complete?order_id=1
 
 ---
 
+## 6.7 POST `/orders/summary`
+
+注文登録画面の右側にある注文概要パネルだけを描画して返します。
+
+```http
+POST /orders/summary
+```
+
+注文フォームの入力が変わるたびに、HTMXがフォーム全体をこのRouteへPOSTし、
+返ってきたHTMLで `<aside id="summary">` の中身を差し替えます。
+
+```html
+<aside id="summary"
+       hx-post="/orders/summary"
+       hx-trigger="input from:#order-form delay:200ms, change from:#order-form"
+       hx-include="#order-form">
+  {% include "_summary.html" %}
+</aside>
+```
+
+HTMXの属性は `<form>` ではなく `<aside>` 側に置いている点が重要です。
+`<form>` に付けるとHTMXがsubmitを横取りしてしまい、
+`POST /orders` → 303リダイレクトという通常の遷移が壊れます。
+`hx-include` でフォームの値を**読むだけ**にすれば干渉しません。
+
+明細は注文完了画面と同じ `OrderItem` モデルを組み立てて描画します。
+金額計算がプレビューと確定後で1箇所に揃うため、ずれようがありません。
+
+`POST /orders` と違い、**弁当が1件も選ばれていなくても400にはなりません**。
+概要パネルは空のフォームから始まるためです。
+この違いのために、数量を取り出す処理は次の2つに分かれています。
+
+| Function | 内容 |
+|---|---|
+| `iter_quantities(form)` | `quantity_*` から正の数量を取り出す（空でもよい） |
+| `parse_quantities(form)` | `iter_quantities()` を呼び、空なら400を返す |
+
+> 実運用であれば、入力のたびに弁当・会社マスタを引き直すのは避けて
+> キャッシュするところです。ここでは教材として素直な実装を優先し、
+> `delay:200ms` のデバウンスだけを入れています。
+
+---
+
+## 6.8 GET `/companies/rows`
+
+取引先一覧のカード部分だけを描画して返します。
+
+```http
+GET /companies/rows?q=ABC
+```
+
+`q` はキーワードで、`db.fetch_company_contacts(keyword=q)` を通じて
+SQLの `ILIKE` による絞り込みになります（§4.1）。
+
+```html
+<input type="search" name="q"
+       hx-get="/companies/rows"
+       hx-trigger="input changed delay:300ms, search"
+       hx-target="#company-rows" />
+<div id="company-rows">{% include "_company_rows.html" %}</div>
+```
+
+`HX-Request` ヘッダを見て全ページと部分HTMLを出し分ける方法もありますが、
+このリポジトリでは**独立したRoute**にしています。
+URLを直接開けば何が返るかを確認でき、そのままテストにも書けるためです。
+
+---
+
 # 7. 注文履歴のデータ取得
 
 注文履歴では、`orders`、`companies`、`order_items`、`bento` をJOINして注文情報を取得します。
@@ -661,6 +786,14 @@ b.price * oi.quantity
 | 注文 | `POST /orders` | `orders` |
 | 注文明細 | `POST /orders` | `order_items` |
 
+フォームは `<label>` で項目名と入力欄を包んだ素のHTMLです。
+数量は `<input type="number" min="0">` で、増減ボタンは持ちません。
+`name` 属性が `quantity_{bento.id}` である点は変わっておらず、
+ここがHTMLとDBをつなぐ鍵になっています。
+
+注文概要パネルは、同じ `name` をHTMXがそのままサーバーへ送り返し、
+`iter_quantities()` が `quantity_` の接頭辞から `bento.id` を復元します。
+
 取引先一覧画面では、次のように対応させています。
 
 | HTML | Python | PostgreSQL |
@@ -672,15 +805,23 @@ b.price * oi.quantity
 | 注文件数 | `company.order_count` | `orders` の件数 |
 | 最終注文日 | `company.last_order_date` | `MAX(orders.order_date)` |
 | 累計金額 | `company.total_price` | `SUM(bento.price * order_items.quantity)` |
+| 絞り込み | `q`（`GET /companies/rows`） | `WHERE ... ILIKE` |
 
-アレルギーについては、現在の画面・Python処理では未使用ですが、データベースには、
+アレルギーについては、注文登録画面の `<details>` で開く食品アレルギー表で利用しています。
+
+| HTML | Python | PostgreSQL |
+|---|---|---|
+| 弁当 | `item.bento_name` | `bento.name` |
+| アレルゲン | `item.allergens` | `allergens.name`（`bento_allergens` 経由） |
+
+多対多の関係を、
 
 ```text
 allergens
 bento_allergens
 ```
 
-を含むスキーマを保持しています。
+という中間テーブルを含むスキーマで表現しています。
 
 ---
 
@@ -694,7 +835,7 @@ bento_allergens
 |---|---|
 | `get_connection()` | PostgreSQLへの接続を作成 |
 | `fetch_companies()` | 会社一覧を取得 |
-| `fetch_company_contacts()` | 会社の連絡先と注文実績を取得 |
+| `fetch_company_contacts(keyword)` | 会社の連絡先と注文実績を取得（`keyword` で絞り込み） |
 | `fetch_bentos()` | 弁当一覧を取得 |
 | `fetch_bento_allergens()` | 弁当ごとのアレルゲン一覧を取得 |
 | `fetch_orders()` | 注文履歴を取得 |
@@ -820,6 +961,8 @@ flowchart TD
     UI -->|POST /orders| API
     UI -->|GET /orders| API
     UI -->|GET /orders/complete| API
+    UI -->|POST /orders/summary - HTMX| API
+    UI -->|GET /companies/rows - HTMX| API
 
     API --> MODEL
     API --> DBLAYER
@@ -833,7 +976,7 @@ flowchart TD
   - フォームを解析する
   - Pydanticモデルを生成する
   - DB操作を呼び出す
-  - Jinja2テンプレートを返す
+  - Jinja2テンプレートを返す（ページ全体、またはHTMX向けの部分HTML）
 - `schemas.py`
   - アプリケーションで扱うデータモデルを定義する
   - Pydanticによる値の制約を定義する
@@ -855,7 +998,28 @@ flowchart TD
 - 注文登録はトランザクションで処理する
 - HTML/Jinja2を中心としたシンプルなフロントエンドにする
 - 必要以上にフレームワークを導入しない
+- CSSはクラスレスフレームワークに任せ、テンプレートに書かない
+- 画面の更新はサーバーが返すHTMLで行い、手書きのJavaScriptは書かない
 - Python側のデータモデルはイミュータブルに扱う
+
+Pico.css と HTMX を入れても「必要以上にフレームワークを導入しない」という方針は
+変わりません。どちらもビルド不要で、読み込みは `<link>` と `<script>` の各1行、
+仮想DOMもコンポーネントモデルも持ち込まないためです。
+
+むしろ、この2つは**テンプレートからノイズを取り除くために**入れています。
+
+| | 導入前 | 導入後 |
+|---|---|---|
+| テンプレート合計 | 1,451行 | 310行 |
+| テンプレート内のCSS | 944行 | 3行 |
+| 手書きJavaScript | 134行 | 0行 |
+
+削れた134行のJavaScriptは、主に金額の再計算でした。
+現在その計算はPython側の `OrderItem` と `format_yen` だけが持っており、
+注文概要パネルと注文完了画面が同じ結果を返すことが保証されます。
+「同じ計算をJavaScriptとPythonに二重に書かない」ことが、
+このリポジトリの本題（業務データをRDBとPythonでどう表現するか）と
+合致していると考えています。
 
 特に注文登録では、`OrderDraft` や `QuantitySelection` などのモデルを介して、フォームから受け取ったデータを明示的なデータ構造に変換してからDBへ渡します。
 
@@ -868,7 +1032,7 @@ flowchart TD
 - 会社一覧の取得
 - 弁当一覧の取得
 - 弁当価格の表示
-- メイン画面から開く食品アレルギー表
+- メイン画面から開く食品アレルギー表（`<details>` アコーディオン）
 - 会社・注文日・弁当数量を指定した注文登録
 - 注文と注文明細のトランザクション処理
 - 注文履歴の表示
@@ -878,7 +1042,10 @@ flowchart TD
 - 金額の「円」形式での表示
 - 担当者・メールアドレス・電話番号を表示する取引先一覧画面
 - 会社ごとの注文件数・最終注文日・累計金額の集計
-- 取引先一覧のキーワード絞り込み
+- 取引先一覧のキーワード絞り込み（HTMX + SQLの `ILIKE` によるサーバー側処理）
+- 入力に追従する注文概要パネル（HTMXによるサーバー側レンダリング）
+- `base.html` の継承による共通レイアウト
+- Pico.css によるレスポンシブ表示とダークモードの自動対応
 
 ---
 
@@ -887,14 +1054,14 @@ flowchart TD
 現在すでに注文登録・注文履歴・注文詳細まで実装されているため、今後の拡張候補は次のようになります。
 
 1. HTML/CSSの改善
-2. JavaScriptによる入力支援
+2. 弁当・会社マスタのキャッシュ（注文概要パネルが毎回引き直しているため）
 3. 入力値・存在する会社や弁当IDなどのバリデーション強化
 4. テストの追加・拡充
 5. Repository層などへの責務分離
 6. Docker化
 7. デプロイ環境への対応
 
-特に `allergens` / `bento_allergens` は、注文画面の食品アレルギー表で利用しており、RDBの多対多関係を具体的に確認できます。
+特に `allergens` / `bento_allergens` は、注文画面の `<details>` で開く食品アレルギー表で利用しており、RDBの多対多関係を具体的に確認できます。
 
 ---
 

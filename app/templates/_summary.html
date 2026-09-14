@@ -1,0 +1,30 @@
+{# <aside id="summary"> の中身だけを出力する部分テンプレート。
+   GET / と POST /orders/summary の両方が同じ context でこれを描画する。 #}
+<hgroup>
+  <h2>注文概要</h2>
+  <p>{{ items | length }}件</p>
+</hgroup>
+<table>
+  <tbody>
+    <tr>
+      <th scope="row">会社</th>
+      <td>{{ company_name or "未選択" }}</td>
+    </tr>
+    <tr>
+      <th scope="row">注文日</th>
+      <td>{{ order_date or "未入力" }}</td>
+    </tr>
+    {% for item in items %}
+    <tr>
+      <th scope="row">{{ item.name }}</th>
+      <td>{{ item.quantity }}個 × {{ item.price | yen }} = {{ item.subtotal | yen }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+  <tfoot>
+    <tr>
+      <th scope="row">合計</th>
+      <td><strong>{{ total_price | yen }}</strong></td>
+    </tr>
+  </tfoot>
+</table>

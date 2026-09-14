@@ -1,0 +1,42 @@
+{# 取引先カードの本体。companies.html と GET /companies/rows の両方から include する。 #}
+{% for company in companies %}
+<article>
+  <header>
+    <strong>{{ company.name }}</strong>
+    <small>（会社ID: {{ company.id }}）</small>
+  </header>
+
+  <table>
+    <tbody>
+      <tr>
+        <th scope="row">担当者</th>
+        <td>{{ company.contact_name or "未登録" }}</td>
+      </tr>
+      <tr>
+        <th scope="row">メール</th>
+        <td>
+          {% if company.email %}
+          <a href="mailto:{{ company.email }}">{{ company.email }}</a>
+          {% else %}未登録{% endif %}
+        </td>
+      </tr>
+      <tr>
+        <th scope="row">電話</th>
+        <td>
+          {% if company.phone %}
+          <a href="tel:{{ company.phone }}">{{ company.phone }}</a>
+          {% else %}未登録{% endif %}
+        </td>
+      </tr>
+    </tbody>
+  </table>
+
+  <footer>
+    注文件数 <strong>{{ company.order_count }}件</strong> ／ 最終注文日
+    <strong>{{ company.last_order_date or "―" }}</strong> ／ 累計金額
+    <strong>{{ company.total_price | yen }}</strong>
+  </footer>
+</article>
+{% else %}
+<p>該当する取引先はありません。</p>
+{% endfor %}

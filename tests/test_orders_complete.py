@@ -46,7 +46,7 @@ class FakeCursor(FakeContext):
         self.sql = ""
         self.params: object = None
 
-    def execute(self, sql: str, params: tuple[Any, ...] | None = None) -> None:
+    def execute(self, sql: str, params: object = None) -> None:
         self.sql = sql
         self.params = params
 
@@ -236,6 +236,77 @@ def test_order_complete_returns_404_for_unknown_order(
     response = TestClient(app).get("/orders/complete?order_id=999")
 
     assert response.status_code == 404
+
+
+def test_order_summary_partial_renders(monkeypatch: pytest.MonkeyPatch) -> None:
+    class SummaryCursor(FakeCursor):
+        @override
+        def fetchall(self) -> list[Row]:
+            if "FROM companies" in self.sql:
+                return [(1, "株式会社ABC"), (2, "株式会社XYZ")]
+            if "FROM bento" in self.sql:
+                return [(1, "唐揚げ弁当", 800), (2, "鮭弁当", 850)]
+            return []
+
+    monkeypatch.setattr(
+        db,
+        "get_connection",
+        lambda: FakeConnection(SummaryCursor()),
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/orders/summary",
+        data={
+            "company_id": "1",
+            "order_date": "2026-08-29",
+            "quantity_1": "2",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "株式会社ABC" in response.text
+    assert "唐揚げ弁当" in response.text
+    assert "1,600円" in response.text
+
+    # 空のフォームでも 400 にはならず、未選択の概要を返す。
+    empty = client.post("/orders/summary", data={})
+
+    assert empty.status_code == 200
+    assert "未選択" in empty.text
+    assert "0円" in empty.text
+
+
+def test_company_rows_partial_filters(monkeypatch: pytest.MonkeyPatch) -> None:
+    cursor = FakeCursor(
+        fetchall_results=[
+            [
+                (
+                    1,
+                    "株式会社ABC",
+                    "山田 太郎",
+                    "yamada@abc.example.jp",
+                    "03-1234-5678",
+                    2,
+                    date(2026, 8, 29),
+                    12000,
+                )
+            ]
+        ],
+    )
+    monkeypatch.setattr(
+        db,
+        "get_connection",
+        lambda: FakeConnection(cursor),
+    )
+
+    response = TestClient(app).get("/companies/rows", params={"q": "ABC"})
+
+    assert response.status_code == 200
+    # 部分テンプレートなので HTML 文書まるごとではない。
+    assert "<!doctype" not in response.text.lower()
+    assert "株式会社ABC" in response.text
+    assert cursor.params == {"keyword": "ABC", "pattern": "%ABC%"}
 
 
 def test_parse_quantities_ignores_invalid_and_zero_values() -> None:
